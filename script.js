@@ -1,234 +1,235 @@
-// Waterfall chart for GDP using merged(2).csv (semicolon DSV)
-// Improved: filters out NaN GDP rows, uses first valid GDP as base,
-// reduces x-axis ticks to avoid overcrowding, avoids NaN in labels.
+// script.js — Waterfall chart per country (D3 v7)
 
-const margin = {top: 30, right: 160, bottom: 80, left: 110};
-const width = 1000 - margin.left - margin.right;
+// layout
+const margin = { top: 40, right: 160, bottom: 80, left: 80 };
+const width = 1100 - margin.left - margin.right;
 const height = 520 - margin.top - margin.bottom;
 
 const svg = d3.select("#chart")
   .attr("viewBox", `0 0 ${width + margin.left + margin.right} ${height + margin.top + margin.bottom}`)
-  .attr("preserveAspectRatio","xMidYMid meet");
+  .attr("preserveAspectRatio", "xMidYMid meet");
 
 svg.selectAll("*").remove();
 const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
 
-// scales
-const x = d3.scaleBand().padding(0.25).range([0, width]);
-const y = d3.scaleLinear().range([height, 0]);
-const colorUp = "#2ca02c";
-const colorDown = "#d62728";
-const colorBase = "#1f77b4";
+// groups we'll reuse and clear
+const chartG = g.append("g").attr("class", "chartG");
+const xAxisG = g.append("g").attr("class", "x axis").attr("transform", `translate(0,${height})`);
+const yAxisG = g.append("g").attr("class", "y axis");
+const legendG = g.append("g").attr("class", "legendG").attr("transform", `translate(${width + 20},10)`);
 
-const xG = g.append("g").attr("transform", `translate(0,${height})`);
-const yG = g.append("g");
-
-const tooltip = d3.select("body").append("div").attr("class","tooltip").style("display","none");
-const legendG = svg.append("g").attr("transform", `translate(${width + margin.left + 10}, ${margin.top})`);
-
-// robust number parser (comma -> dot, keep exponent notation)
-function parseNum(s){
+// helpers
+function parseNum(s) {
   if (s === undefined || s === null) return NaN;
   let v = String(s).trim();
   if (v === "" || v.toLowerCase() === "nan") return NaN;
-  v = v.replace(/\s/g, '').replace(/,/g, '.');
-  v = v.replace(/[^0-9eE+.\-]/g,''); // keep E for exponents
+  v = v.replace(/\s/g, "").replace(/,/g, ".");
+  v = v.replace(/[^0-9eE+.\-]/g, "");
   const n = parseFloat(v);
   return isFinite(n) ? n : NaN;
 }
 
-// load file (semicolon-separated)
+// load file from root (merged(2).csv)
 d3.text("merged(2).csv").then(raw => {
   const dsv = d3.dsvFormat(";");
-  const data = dsv.parse(raw);
+  const rows = dsv.parse(raw);
 
-  if (!data || data.length === 0) {
-    alert("CSV leer oder Fehler beim Parsen.");
-    return;
-  }
+  // find keys for Country and Year and GDP
+  const keys = Object.keys(rows[0] || {});
+  const countryKey = keys.find(k => /country/i.test(k)) || "Country Name" || keys[1];
+  const yearKey = keys.find(k => /year/i.test(k)) || "Year";
+  const gdpKey = keys.find(k => /^GDP($|[^a-z])/i.test(k)) || keys.find(k => /Gross domestic product|GDP/i) || "GDP";
 
-  // detect keys heuristically
-  const countryKey = Object.keys(data[0]).find(k => /country/i.test(k)) || Object.keys(data[0])[1];
-  const yearKey = Object.keys(data[0]).find(k => /year/i.test(k)) || Object.keys(data[0]).find(k => /yr|year/i.test(k));
-  const gdpKey = Object.keys(data[0]).find(k => /^GDP$/i.test(k)) || Object.keys(data[0]).find(k => /gdp/i.test(k));
-
-  // map rows, parse numbers
-  const rows = data.map(r => ({
-    country: r[countryKey],
-    year: +r[yearKey],
-    GDP: parseNum(r[gdpKey]),
-    raw: r
-  })).filter(r => r.country && !isNaN(r.year));
+  const cleaned = rows.map(r => ({
+    country: r[countryKey] ? r[countryKey].trim() : "",
+    year: parseInt((r[yearKey] || "").trim()) || NaN,
+    gdp: parseNum(r[gdpKey])
+  })).filter(d => d.country && !isNaN(d.year));
 
   // group by country
-  const grouped = d3.group(rows, d => d.country);
-  const countries = Array.from(grouped.keys()).sort((a,b)=>a.localeCompare(b));
+  const byCountry = d3.group(cleaned, d => d.country);
+  const countries = Array.from(byCountry.keys()).sort((a,b) => a.localeCompare(b));
 
   // populate select
   const select = d3.select("#countrySelect");
-  select.selectAll("option").remove();
-  select.selectAll("option")
-    .data(countries)
-    .join("option")
-    .attr("value", d=>d)
-    .text(d=>d);
+  select.selectAll("option").data(countries).join("option")
+    .attr("value", d => d)
+    .text(d => d);
 
-  if (countries.length > 0) select.property("value", countries[0]);
+  // default: first country selected
+  select.property("value", countries[0]);
 
-  // Build waterfall items but skip years with NaN GDP.
-  function buildWaterfall(country) {
-    const arr = (grouped.get(country) || []).slice().sort((a,b)=>a.year-b.year);
-    // filter to entries with valid GDP
-    const valid = arr.filter(d => !isNaN(d.GDP));
-    if (valid.length === 0) return [];
+  // axis scales (we will update domains on each draw)
+  const xBand = d3.scaleBand().paddingInner(0.15).range([0, width]);
+  const y = d3.scaleLinear().range([height, 0]);
 
+  // axis format helper
+  const fmt = d3.format(",.0f");
+  const fmtShort = d3.format(".2s");
+
+  function computeWaterfall(dataSorted) {
+    // dataSorted: array of {year,gdp} sorted by year
+    if (!dataSorted || dataSorted.length === 0) return [];
     const items = [];
-    // first valid entry is base
-    const first = valid[0];
-    items.push({label: String(first.year), year: first.year, value: first.GDP, type: "base"});
-
-    for (let i=1;i<valid.length;i++){
-      const prev = valid[i-1];
-      const cur = valid[i];
-      const delta = cur.GDP - prev.GDP;
-      items.push({label: String(cur.year), year: cur.year, value: delta, type: (delta >= 0 ? "increase" : "decrease")});
+    let cum = dataSorted[0].gdp || 0;
+    // first item is the start baseline
+    items.push({
+      type: "start",
+      year: dataSorted[0].year,
+      value: dataSorted[0].gdp,
+      start: 0,
+      end: cum
+    });
+    for (let i = 1; i < dataSorted.length; i++) {
+      const prev = dataSorted[i-1].gdp || 0;
+      const cur = dataSorted[i].gdp || 0;
+      const delta = cur - prev;
+      const start = prev;
+      const end = cur;
+      items.push({
+        type: delta >= 0 ? "increase" : "decrease",
+        year: dataSorted[i].year,
+        value: delta,
+        start,
+        end
+      });
     }
     return items;
   }
 
-  function draw(country) {
-    const items = buildWaterfall(country);
-    // clear previous chart area content (keeps responsive viewBox)
-    g.selectAll(".bar").remove();
-    g.selectAll(".bar-label").remove();
-    g.selectAll(".connector").remove();
-    svg.selectAll(".chart-title").remove();
-    legendG.selectAll("*").remove();
+  function drawForCountry(countryName) {
+    // clear chart area (clean re-render)
+    chartG.selectAll("*").remove();
 
-    if (items.length === 0) {
-      svg.append("text").attr("class","chart-title").attr("x", margin.left).attr("y", 18)
-        .attr("font-size","14px").attr("font-weight","700")
-        .text(`${country} — keine GDP-Daten (gültige Einträge fehlen)`);
+    const rows = Array.from(byCountry.get(countryName) || []);
+    if (rows.length === 0) {
+      chartG.append("text").attr("x", 10).attr("y", 20).text("Keine Daten für dieses Land.");
       return;
     }
+    const sorted = rows.sort((a,b) => a.year - b.year);
 
-    // compute cumulative start/end, ensure numeric
-    let cum = 0;
-    const computed = items.map((it, i) => {
-      if (i===0){
-        const start = 0;
-        const end = Number.isFinite(it.value) ? it.value : 0;
-        cum = end;
-        return {...it, start, end, cumulative: cum};
-      } else {
-        const start = cum;
-        const end = cum + (Number.isFinite(it.value) ? it.value : 0);
-        cum = end;
-        return {...it, start, end, cumulative: cum};
-      }
-    });
+    // compute waterfall items
+    const items = computeWaterfall(sorted);
 
-    // x domain & y domain
-    x.domain(computed.map(d=>d.label));
-    const allYs = computed.flatMap(d => [d.start, d.end]);
-    const yMin = Math.min(0, d3.min(allYs));
-    const yMax = d3.max(allYs);
-    // handle degenerate range
-    const pad = (yMax - yMin) === 0 ? Math.abs(yMax)*0.1 + 1 : (yMax - yMin)*0.05;
-    y.domain([yMin - pad, yMax + pad]);
+    // x domain = list of years in items
+    const years = items.map(d => d.year);
+    xBand.domain(years);
 
-    // axis ticks: show only every 5th year or adaptive
-    const years = computed.map(d=>+d.label);
-    let tickValues;
-    if (years.length <= 10) tickValues = years;
-    else {
-      const step = Math.ceil(years.length / 10);
-      tickValues = years.filter((d,i) => i % step === 0);
-    }
+    // compute y domain with a margin
+    const values = items.flatMap(d => [d.start || 0, d.end || 0]);
+    let yMin = d3.min(values.concat(0));
+    let yMax = d3.max(values.concat(0));
+    // if all values small, set a minimal range
+    if (yMax === yMin) { yMax = yMax + 1; yMin = Math.min(0, yMin - 1); }
+    y.domain([yMin - (Math.abs(yMin)*0.05), yMax + (Math.abs(yMax)*0.05)]).nice();
 
-    xG.call(d3.axisBottom(x).tickValues(computed.map(d=>d.label))).selectAll("text")
-      .attr("transform","rotate(-40)").style("text-anchor","end").style("font-size","11px");
-    // additionally reduce number of visible year labels by controlling which get shown
-    xG.selectAll(".tick text").style("display", function(d,i){
-      // show only ticks whose index is multiple of step
-      const idx = computed.findIndex(c=>c.label === d);
-      if (computed.length <= 12) return "block";
-      const step = Math.ceil(computed.length / 12);
-      return (idx % step === 0) ? "block" : "none";
-    });
+    // axes
+    const xTicksEvery = Math.ceil(years.length / 12); // keep tick count reasonable
+    const xTickValues = years.filter((d,i) => (i % xTicksEvery) === 0);
 
-    yG.call(d3.axisLeft(y).tickFormat(d3.format(".2s")));
+    xAxisG.call(d3.axisBottom(xBand).tickValues(xTickValues).tickFormat(d3.format("d")))
+      .selectAll("text")
+      .attr("transform", "rotate(-40)").style("text-anchor", "end").attr("dx", "-0.4em").attr("dy", "0.3em");
 
-    // bars
-    const bars = g.selectAll(".bar").data(computed, d=>d.label);
-    const be = bars.enter().append("g").attr("class","bar");
-
-    be.append("rect")
-      .attr("class","bar-rect")
-      .attr("x", d => x(d.label))
-      .attr("width", x.bandwidth())
-      .attr("y", d => y(Math.max(d.start, d.end)))
-      .attr("height", d => Math.max(1, Math.abs(y(d.start) - y(d.end))))
-      .attr("fill", d => d.type === "base" ? colorBase : (d.value >= 0 ? colorUp : colorDown))
-      .attr("stroke", "#333")
-      .on("mouseover", (event,d) => {
-        tooltip.style("display","block")
-          .html(`<strong>${country}</strong><br/>Jahr: ${d.label}<br/>Wert: ${d.type === "base" ? d3.format(",.0f")(d.value) + " (Start)" : (d.value>=0?"+":"") + d3.format(",.0f")(d.value)}<br/>Kumulativ: ${d3.format(",.0f")(d.cumulative)}`);
-      })
-      .on("mousemove", (event) => {
-        tooltip.style("left", (event.pageX + 12) + "px").style("top", (event.pageY - 12) + "px");
-      })
-      .on("mouseout", () => tooltip.style("display","none"));
-
-    // labels with guarding against NaN
-    be.append("text")
-      .attr("class","bar-label")
-      .attr("x", d => x(d.label) + x.bandwidth()/2)
-      .attr("y", d => y(d.end) - 6)
-      .attr("text-anchor","middle")
-      .style("font-size","11px")
-      .text(d => Number.isFinite(d.end) ? d3.format(",.0f")(d.end) : "");
-
-    // connectors
-    const connectors = be.append("line").attr("class","connector")
-      .attr("x1", (d,i) => i===0 ? 0 : x(computed[i-1].label) + x.bandwidth())
-      .attr("x2", (d,i) => x(d.label))
-      .attr("y1", (d,i) => i===0 ? y(0) : y(computed[i-1].end))
-      .attr("y2", (d,i) => y(d.start))
-      .attr("stroke","#666")
-      .attr("stroke-dasharray","3 2");
+    yAxisG.call(d3.axisLeft(y).tickFormat(d => {
+      // human-friendly: use G/T if large
+      return fmtShort(d);
+    }));
 
     // title
-    svg.append("text").attr("class","chart-title")
-      .attr("x", margin.left).attr("y", 18)
-      .attr("font-size","14px").attr("font-weight","700")
-      .text(`${country} — GDP Waterfall (${computed[0].label} → ${computed[computed.length-1].label})`);
+    chartG.append("text")
+      .attr("x", 0)
+      .attr("y", -18)
+      .attr("class", "chart-title")
+      .text(`${countryName} — GDP Waterfall (${years[0]} … ${years[years.length - 1]})`)
+      .style("font-weight","700");
 
-    // legend
+    // bars group
+    const barG = chartG.append("g").attr("class","bars");
+
+    // draw bars using data join (ensures update/exit handled correctly)
+    const bw = Math.max(6, xBand.bandwidth());
+    const bars = barG.selectAll("g.bar").data(items, d => d.year);
+
+    const barsEnter = bars.enter().append("g").attr("class","bar")
+      .attr("transform", d => `translate(${xBand(d.year)},0)`);
+
+    // rect
+    barsEnter.append("rect")
+      .attr("class","bar-rect")
+      .attr("x", 0)
+      .attr("width", bw)
+      .attr("y", d => y(Math.max(d.start, d.end)))
+      .attr("height", d => Math.max(1, Math.abs(y(d.start) - y(d.end))))
+      .attr("fill", d => d.type === "start" ? "#4682b4" : (d.type === "increase" ? "#2e8b57" : "#b22222"))
+      .attr("stroke", "#333")
+      .attr("stroke-width", 0.6);
+
+    // add labels above bars
+    barsEnter.append("text")
+      .attr("class","bar-label")
+      .attr("x", bw / 2)
+      .attr("y", d => y(Math.max(d.start, d.end)) - 6)
+      .attr("text-anchor","middle")
+      .style("font-size","12px")
+      .text(d => {
+        if (d.type === "start") return fmt(d.value || 0);
+        return (d.value >= 0 ? "+" : "") + fmt(d.value);
+      });
+
+    // small line marker to baseline for start item (optional)
+    barsEnter.filter(d => d.type === "start").append("line")
+      .attr("x1", bw + 2).attr("x2", bw + 2)
+      .attr("y1", d => y(d.start)).attr("y2", d => y(d.end))
+      .attr("stroke", "#4682b4").attr("stroke-width", 2);
+
+    // tooltip interaction (simple)
+    barsEnter.on("mouseenter", (event, d) => {
+      const tt = d3.select("body").selectAll(".tt").data([d]);
+      const ttEnter = tt.enter().append("div").attr("class","tt tooltip").style("position","absolute");
+      ttEnter.merge(tt)
+        .html(() => {
+          if (d.type === "start") return `<strong>${d.year}</strong><br>Start: ${fmt(d.value || 0)}`;
+          return `<strong>${d.year}</strong><br>Δ: ${ (d.value >= 0 ? "+" : "") + fmt(d.value) }<br>Prev: ${fmt(d.start)}<br>Now: ${fmt(d.end)}`;
+        })
+        .style("left", (event.pageX + 14) + "px")
+        .style("top", (event.pageY - 10) + "px")
+        .style("display","block");
+    }).on("mouseleave", () => {
+      d3.selectAll(".tt").remove();
+    });
+
+    // legend (clear then add)
+    legendG.selectAll("*").remove();
     const legendData = [
-      {label: "Startwert", color: colorBase},
-      {label: "Zunahme (Δ > 0)", color: colorUp},
-      {label: "Abnahme (Δ < 0)", color: colorDown}
+      { label: "Startwert", color: "#4682b4" },
+      { label: "Zunahme (Δ > 0)", color: "#2e8b57" },
+      { label: "Abnahme (Δ < 0)", color: "#b22222" }
     ];
-    const lg = legendG.selectAll(".lg").data(legendData).enter().append("g").attr("class","lg")
-      .attr("transform", (d,i) => `translate(0,${i*24})`);
-    lg.append("rect").attr("width",14).attr("height",14).attr("fill", d => d.color).attr("stroke","#333");
-    lg.append("text").attr("x",20).attr("y",11).text(d => d.label).attr("font-size","12px");
+    const legendItem = legendG.selectAll(".legendItem").data(legendData).enter().append("g")
+      .attr("class","legendItem").attr("transform", (d,i) => `translate(0, ${i*24})`);
+    legendItem.append("rect").attr("width", 14).attr("height", 14).attr("fill", d => d.color).attr("stroke","#333");
+    legendItem.append("text").attr("x", 20).attr("y", 12).text(d => d.label).style("font-size","13px");
+
+    // final visual tweak: reduce label overlap if many years — optional (skip some)
+    // handled by tick selection above
   }
 
   // initial draw
-  draw(select.property("value"));
+  drawForCountry(select.property("value"));
 
-  // change handler
-  select.on("change", () => {
-    draw(select.node().value);
+  // events
+  d3.select("#countrySelect").on("change", function() {
+    const country = this.value;
+    drawForCountry(country);
   });
 
   d3.select("#resetView").on("click", () => {
-    draw(select.node().value);
+    // re-draw currently selected country — this also clears previous DOM clutter
+    drawForCountry(d3.select("#countrySelect").node().value);
   });
 
 }).catch(err => {
   console.error("Fehler beim Laden/Parsen der CSV:", err);
-  alert("Konnte merged(2).csv nicht laden. Prüfe Dateiname und Format (semikolon).");
+  d3.select("#chart").append("text").text("Fehler beim Laden der Daten. Prüfe merged(2).csv");
 });
