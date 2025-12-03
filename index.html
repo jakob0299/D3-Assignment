@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Interactive GDP time series (D3)</title>
+
+  <!-- D3 v7 -->
+  <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <main>
+    <h1>GDP over Time — interactive D3 visualization</h1>
+
+    <div class="controls">
+      <label for="countrySelect">Select countries (Ctrl/Cmd to multi-select):</label>
+      <select id="countrySelect" multiple size="8"></select>
+      <div class="buttons">
+        <button id="resetZoom">Reset Zoom</button>
+      </div>
+    </div>
+
+    <div id="chartArea">
+      <svg id="chart"></svg>
+    </div>
+
+    <p class="note">
+      Data: your semicolon-delimited CSV. Numeric fields parsed by replacing commas with dots.
+    </p>
+  </main>
+
+  <script src="js/script.js"></script>
+</body>
+</html>
