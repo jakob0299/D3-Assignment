@@ -2,13 +2,13 @@
 <html lang="de">
 <head>
   <meta charset="utf-8" />
-  <title>GDP Waterfall — D3</title>
+  <title>GDP Waterfall — Veränderung über Zeit</title>
 
   <!-- D3 v7 -->
   <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
 
-  <!-- local css at repo root -->
   <link rel="stylesheet" href="style.css" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
 </head>
 <body>
   <main>
@@ -17,13 +17,13 @@
     <div class="controls">
       <label for="countrySelect">Land wählen:</label>
       <select id="countrySelect" size="8"></select>
-      <div class="buttons">
-        <button id="resetView" title="Zurücksetzen">Reset View</button>
+      <div class="controls-buttons">
+        <button id="resetView">Reset View</button>
       </div>
     </div>
 
-    <div id="chartArea">
-      <svg id="chart" role="img" aria-label="GDP Waterfall chart"></svg>
+    <div id="chartCard">
+      <svg id="chart" aria-label="GDP Waterfall chart"></svg>
     </div>
 
     <p class="note">
@@ -31,7 +31,6 @@
     </p>
   </main>
 
-  <!-- local js at repo root -->
   <script src="script.js"></script>
 </body>
 </html>
