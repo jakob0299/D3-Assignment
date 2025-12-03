@@ -1,35 +1,37 @@
 <!doctype html>
-<html lang="en">
+<html lang="de">
 <head>
   <meta charset="utf-8" />
-  <title>Interactive GDP time series (D3)</title>
+  <title>GDP Waterfall — D3</title>
 
   <!-- D3 v7 -->
   <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
 
-  <link rel="stylesheet" href="css/style.css" />
+  <!-- local css at repo root -->
+  <link rel="stylesheet" href="style.css" />
 </head>
 <body>
   <main>
-    <h1>GDP over Time — interactive D3 visualization</h1>
+    <h1>GDP Waterfall — Veränderung über Zeit (Jahr → Jahr)</h1>
 
     <div class="controls">
-      <label for="countrySelect">Select countries (Ctrl/Cmd to multi-select):</label>
-      <select id="countrySelect" multiple size="8"></select>
+      <label for="countrySelect">Land wählen:</label>
+      <select id="countrySelect" size="8"></select>
       <div class="buttons">
-        <button id="resetZoom">Reset Zoom</button>
+        <button id="resetView" title="Zurücksetzen">Reset View</button>
       </div>
     </div>
 
     <div id="chartArea">
-      <svg id="chart"></svg>
+      <svg id="chart" role="img" aria-label="GDP Waterfall chart"></svg>
     </div>
 
     <p class="note">
-      Data: your semicolon-delimited CSV. Numeric fields parsed by replacing commas with dots.
+      Die Daten kommen aus <code>merged(2).csv</code> (semikolon-getrennt). Dezimal-Kommas werden beim Parsen ersetzt.
     </p>
   </main>
 
-  <script src="js/script.js"></script>
+  <!-- local js at repo root -->
+  <script src="script.js"></script>
 </body>
 </html>
