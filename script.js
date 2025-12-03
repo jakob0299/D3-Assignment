@@ -1,327 +1,237 @@
-// D3 interactive multi-line time-series (GDP). Drop into js/script.js
-// Expects data/gdp.csv (semicolon-separated) — adapt path if needed.
+// Waterfall chart for GDP using merged(2).csv (semicolon DSV)
+// Expects file in repo root named exactly: merged(2).csv
 
-// Layout
-const margin = {top: 20, right: 110, bottom: 110, left: 70};
+const margin = {top: 30, right: 140, bottom: 60, left: 110};
 const width = 1000 - margin.left - margin.right;
-const height = 480 - margin.top - margin.bottom;
+const height = 520 - margin.top - margin.bottom;
 
-// Create responsive svg
 const svg = d3.select("#chart")
   .attr("viewBox", `0 0 ${width + margin.left + margin.right} ${height + margin.top + margin.bottom}`)
   .attr("preserveAspectRatio","xMidYMid meet");
 
 const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
 
-// Scales
-let x = d3.scaleLinear().range([0, width]);
-let y = d3.scaleLinear().range([height, 0]);
-const color = d3.scaleOrdinal(d3.schemeTableau10);
+// scales
+const x = d3.scaleBand().padding(0.25).range([0, width]);
+const y = d3.scaleLinear().range([height, 0]);
+const colorUp = "#2ca02c";
+const colorDown = "#d62728";
+const colorBase = "#1f77b4";
 
-// Axes groups
-const xAxisG = g.append("g").attr("transform", `translate(0,${height})`);
-const yAxisG = g.append("g");
+// axes containers
+const xG = g.append("g").attr("transform", `translate(0,${height})`);
+const yG = g.append("g");
 
-// Clipping (so zoomed lines don't overflow)
-g.append("clipPath").attr("id","clip")
-  .append("rect").attr("width", width).attr("height", height);
-
-// Lines container
-const linesG = g.append("g").attr("clip-path","url(#clip)");
-
-// Tooltip
+// tooltip
 const tooltip = d3.select("body").append("div").attr("class","tooltip").style("display","none");
 
-// Brush container (we'll use brush to zoom by narrowing x domain)
-const brushG = svg.append("g")
-  .attr("transform", `translate(${margin.left},${margin.top + height + 10})`);
+// legend area
+const legendG = svg.append("g").attr("transform", `translate(${width + margin.left + 10}, ${margin.top})`);
 
-// Load & parse data
-d3.text("data/gdp.csv").then(rawText => {
-  // parse semicolon DSV (handles header)
+// load file (semicolon-separated)
+d3.text("merged(2).csv").then(raw => {
   const dsv = d3.dsvFormat(";");
-  const data = dsv.parse(rawText);
+  const data = dsv.parse(raw);
 
-  // The header in your sample had an empty first column; normalize keys
-  // find the column that contains "Country" name
-  // We'll create a cleaned row object per row and parse numbers robustly.
-  const cleaned = data.map(row => {
-    // helper to find the key for "Country Name" or "Country" etc.
-    const countryKey = Object.keys(row).find(k => /country/i.test(k)) || "Country Name";
-    const yearKey = Object.keys(row).find(k => /year/i.test(k)) || "Year";
-
-    function parseNum(s){
-      if (s === undefined || s === null) return NaN;
-      let v = String(s).trim();
-      if (v === "" || v.toLowerCase() === "nan") return NaN;
-      // remove spaces, replace comma decimal with dot, remove thousands spaces
-      v = v.replace(/\s/g,'').replace(/,/g,'.');
-      // sometimes there are stray semicolons or plus signs - remove non-numeric trailing chars
-      v = v.replace(/[^0-9eE+.\-]/g,'');
-      const n = parseFloat(v);
-      return isFinite(n) ? n : NaN;
-    }
-
-    return {
-      country: row[countryKey],
-      year: +row[yearKey],
-      GDP: parseNum(row["GDP"] ?? row[" Gross domestic product (current US$) "] ?? row["GDP (current)"] ?? row["GDP"]),
-      GDP_growth: parseNum(row["GDP growth"] ?? row["GDP growth"] ?? row["GDP growth"] ),
-      population: parseNum(row["Population - Sex: all - Age: all - Variant: estimates"] ?? row["Population"]),
-      code: row["Code"] || row["Country Code"] || null,
-      continent: row["continent"] || row["Continent"] || null,
-      raw: row
-    };
-  });
-
-  // Remove rows w/o year or country
-  const filtered = cleaned.filter(d => d.country && !isNaN(d.year));
-
-  // Group per country and sort by year
-  const seriesByCountry = d3.group(filtered, d => d.country);
-  const countries = Array.from(seriesByCountry.keys()).sort((a,b)=>a.localeCompare(b));
-
-  // prepare series array
-  const series = [];
-  for (const [country, rows] of seriesByCountry) {
-    const sorted = rows.sort((a,b)=>a.year - b.year);
-    series.push({country, values: sorted});
+  // robust number parser (comma -> dot, remove spaces)
+  function parseNum(s){
+    if (s === undefined || s === null) return NaN;
+    let v = String(s).trim();
+    if (v === "" || v.toLowerCase() === "nan") return NaN;
+    v = v.replace(/\s/g, '').replace(/,/g, '.');
+    v = v.replace(/[^0-9eE+.\-]/g,''); // clean stray chars
+    const n = parseFloat(v);
+    return isFinite(n) ? n : NaN;
   }
+
+  // detect keys
+  const countryKey = Object.keys(data[0]).find(k => /country/i.test(k)) || "Country Name" || Object.keys(data[0])[1];
+  const yearKey = Object.keys(data[0]).find(k => /year/i.test(k)) || "Year";
+  const gdpKey = Object.keys(data[0]).find(k => /^GDP$/i.test(k)) || Object.keys(data[0]).find(k => /gdp/i.test(k));
+
+  // clean rows
+  const rows = data.map(r => ({
+    country: r[countryKey],
+    year: +r[yearKey],
+    GDP: parseNum(r[gdpKey]),
+    raw: r
+  })).filter(r => r.country && !isNaN(r.year));
+
+  // group by country
+  const grouped = d3.group(rows, d => d.country);
+  const countries = Array.from(grouped.keys()).sort((a,b)=>a.localeCompare(b));
 
   // populate select
   const select = d3.select("#countrySelect");
   select.selectAll("option")
     .data(countries)
     .join("option")
-    .attr("value", d => d)
-    .text(d => d);
+    .attr("value", d=>d)
+    .text(d=>d);
 
-  // default selection: first country + few large ones if available
-  const defaultPick = [countries[0]];
-  // pre-select top few if list contains "United States" etc
-  if(countries.includes("United States")) defaultPick.push("United States");
-  select.selectAll("option").property("selected", d => defaultPick.includes(d));
+  // default pick: first country
+  if (countries.length) select.property("value", countries[0]);
 
-  // set domains
-  const allYears = filtered.map(d=>d.year);
-  x.domain(d3.extent(allYears));
-  y.domain([0, d3.max(filtered, d => d.GDP) || 1]);
+  // function to build waterfall series for a country
+  function buildWaterfall(country) {
+    const arr = (grouped.get(country) || []).slice().sort((a,b)=>a.year-b.year);
+    if (arr.length === 0) return [];
 
-  // draw axes
-  const xAxis = d3.axisBottom(x).tickFormat(d3.format("d"));
-  const yAxis = d3.axisLeft(y).tickFormat(d => {
-    if (d >= 1e12) return d3.format(".2s")(d);
-    if (d >= 1e9) return d3.format(".2s")(d);
-    return d3.format(".2s")(d);
-  });
+    const items = [];
+    // first entry = starting base
+    const start = {label: String(arr[0].year), year: arr[0].year, value: arr[0].GDP, type: "base"};
+    items.push(start);
 
-  xAxisG.call(xAxis);
-  yAxisG.call(yAxis);
+    // subsequent entries = delta (year-to-year)
+    for (let i=1;i<arr.length;i++){
+      const delta = arr[i].GDP - arr[i-1].GDP;
+      items.push({label: String(arr[i].year), year: arr[i].year, value: delta, type: (delta >= 0 ? "increase" : "decrease")});
+    }
+    return items;
+  }
 
-  // axis labels
-  xAxisG.append("text")
-    .attr("class","axis-label")
-    .attr("x", width/2)
-    .attr("y", 46)
-    .attr("fill","#666")
-    .attr("text-anchor","middle")
-    .text("Year");
+  // draw function
+  function draw(country){
+    const items = buildWaterfall(country);
+    if (items.length === 0) {
+      svg.selectAll(".no-data").remove();
+      svg.append("text").attr("class","no-data").attr("x", margin.left).attr("y", margin.top + 20).text("Keine Daten für dieses Land.");
+      return;
+    } else {
+      svg.selectAll(".no-data").remove();
+    }
 
-  yAxisG.append("text")
-    .attr("transform","rotate(-90)")
-    .attr("x",-height/2)
-    .attr("y",-50)
-    .attr("fill","#666")
-    .attr("text-anchor","middle")
-    .text("GDP (current US$)");
+    // compute cumulative starts and ends
+    let cum = 0;
+    const computed = items.map((it, i) => {
+      if (i===0){
+        const start = 0;
+        const end = it.value;
+        cum = end;
+        return {...it, start, end, cumulative: cum};
+      } else {
+        const start = cum;
+        const end = cum + it.value;
+        cum = end;
+        return {...it, start, end, cumulative: cum};
+      }
+    });
 
-  // line generator
-  const line = d3.line()
-    .defined(d => !isNaN(d.GDP))
-    .x(d => x(d.year))
-    .y(d => y(d.GDP));
+    // build x domain (use label order)
+    x.domain(computed.map(d=>d.label));
+    // y domain must include min(start,end) and max(start,end)
+    const allYs = computed.flatMap(d => [d.start, d.end]);
+    const yMin = Math.min(0, d3.min(allYs));
+    const yMax = d3.max(allYs);
+    y.domain([yMin * 1.05, yMax * 1.05]);
 
-  // function to draw selected countries
-  function update(selectedCountries, transitionDuration = 800) {
-    // filter series
-    const selectedSeries = series.filter(s => selectedCountries.includes(s.country));
+    // axes
+    xG.call(d3.axisBottom(x)).selectAll("text").attr("transform","rotate(-40)").style("text-anchor","end");
+    yG.call(d3.axisLeft(y).tickFormat(d3.format(".2s")));
 
-    color.domain(selectedCountries);
+    // draw bars (waterfall rectangles)
+    const bars = g.selectAll(".bar").data(computed, d=>d.label);
 
-    // update y domain to max of selection (nice)
-    const ymax = d3.max(selectedSeries, s => d3.max(s.values, v => v.GDP)) || d3.max(filtered, d => d.GDP) || 1;
-    y.domain([0, ymax * 1.05]);
+    // exit
+    bars.exit().transition().duration(300).style("opacity",0).remove();
 
-    // update axes
-    yAxisG.transition().duration(transitionDuration).call(d3.axisLeft(y).tickFormat(d => d3.format(".2s")(d)));
-    xAxisG.transition().duration(transitionDuration).call(d3.axisBottom(x).tickFormat(d3.format("d")));
+    // enter
+    const barsEnter = bars.enter().append("g").attr("class","bar");
 
-    // data join for lines
-    const seriesSel = linesG.selectAll(".country-line")
-      .data(selectedSeries, d => d.country);
-
-    // EXIT
-    seriesSel.exit()
-      .transition().duration(400)
-      .style("opacity",0)
-      .remove();
-
-    // ENTER
-    const seriesEnter = seriesSel.enter().append("g").attr("class","country-line");
-
-    seriesEnter.append("path")
-      .attr("class","line")
-      .attr("fill","none")
-      .attr("stroke-width",2.4)
-      .attr("stroke-linejoin","round")
-      .attr("stroke-linecap","round")
-      .attr("d", d => line(d.values))
-      .attr("stroke", d => color(d.country))
-      .each(function(d){
-        // animated drawing using stroke-dasharray
-        const path = this;
-        const total = path.getTotalLength();
-        d3.select(path)
-          .attr("stroke-dasharray", `${total} ${total}`)
-          .attr("stroke-dashoffset", total)
-          .transition().duration(1000).attr("stroke-dashoffset", 0);
-      });
-
-    // add hover circles (invisible until hover)
-    seriesEnter.append("g").attr("class","points")
-      .selectAll("circle")
-      .data(d => d.values.filter(v => !isNaN(v.GDP)))
-      .join("circle")
-      .attr("cx", d => x(d.year))
-      .attr("cy", d => y(d.GDP))
-      .attr("r", 3)
-      .attr("fill", d => color(d.country))
-      .attr("opacity", 0)
-      .on("mouseover", (e,d) => {
+    barsEnter.append("rect")
+      .attr("class","bar-rect")
+      .attr("x", d => x(d.label))
+      .attr("width", x.bandwidth())
+      .attr("y", d => y(Math.max(d.start, d.end)))
+      .attr("height", d => Math.max(1, Math.abs(y(d.start) - y(d.end))))
+      .attr("fill", d => d.type === "base" ? colorBase : (d.value >= 0 ? colorUp : colorDown))
+      .attr("stroke", "#333")
+      .on("mouseover", (event,d) => {
         tooltip.style("display","block")
-          .html(`<strong>${d.country}</strong><br/>Year: ${d.year}<br/>GDP: ${d3.format(",.0f")(d.GDP)}<br/>Population: ${isNaN(d.population) ? "n/a" : d3.format(",")(d.population)}`);
+          .html(`<strong>${country}</strong><br/>Jahr: ${d.label}<br/>Wert: ${d.type === "base" ? d3.format(",.0f")(d.value) + " (Start)" : (d.value>=0?"+":"") + d3.format(",.0f")(d.value)}<br/>Kumulativ: ${d3.format(",.0f")(d.cumulative)}`);
       })
-      .on("mousemove", (e) => {
-        tooltip.style("left", (e.pageX + 12) + "px").style("top", (e.pageY - 12) + "px");
+      .on("mousemove", (event) => {
+        tooltip.style("left", (event.pageX + 12) + "px").style("top", (event.pageY - 12) + "px");
       })
       .on("mouseout", () => tooltip.style("display","none"));
 
-    // UPDATE existing lines (transition)
-    seriesSel.select(".line")
-      .transition().duration(transitionDuration)
-      .attr("d", d => line(d.values))
-      .attr("stroke", d => color(d.country));
+    // update (including transition)
+    bars.select(".bar-rect")
+      .transition().duration(600)
+      .attr("x", d => x(d.label))
+      .attr("width", x.bandwidth())
+      .attr("y", d => y(Math.max(d.start, d.end)))
+      .attr("height", d => Math.max(1, Math.abs(y(d.start) - y(d.end))))
+      .attr("fill", d => d.type === "base" ? colorBase : (d.value >= 0 ? colorUp : colorDown));
 
-    seriesSel.selectAll(".points circle")
-      .data(d => d.values.filter(v => !isNaN(v.GDP)))
-      .join("circle")
-      .transition().duration(transitionDuration)
-      .attr("cx", d => x(d.year))
-      .attr("cy", d => y(d.GDP))
-      .attr("r", 3)
-      .attr("fill", d => color(d.country))
-      .attr("opacity", 0);
+    // numeric labels on bars (end value)
+    const labels = g.selectAll(".bar-label").data(computed, d=>d.label);
+    labels.exit().remove();
+    labels.enter().append("text")
+      .attr("class","bar-label")
+      .attr("x", d => x(d.label) + x.bandwidth()/2)
+      .attr("y", d => y(d.end) - 6)
+      .attr("text-anchor","middle")
+      .text(d => d3.format(",.0f")(d.end))
+      .merge(labels)
+      .transition().duration(600)
+      .attr("x", d => x(d.label) + x.bandwidth()/2)
+      .attr("y", d => y(d.end) - 6)
+      .text(d => d3.format(",.0f")(d.end));
 
-    // Add legend to the right
-    const legend = g.selectAll(".legend").data(selectedSeries, d=>d.country);
-    legend.exit().remove();
-    const legendEnter = legend.enter().append("g").attr("class","legend");
-    legendEnter.append("rect").attr("width",12).attr("height",12).attr("x", width + 18).attr("y", (d,i) => 6 + i*20).attr("fill", d => color(d.country));
-    legendEnter.append("text").attr("x", width + 36).attr("y", (d,i) => 16 + i*20).text(d => d.country).attr("font-size","12px");
+    // draw connector lines between bars (visual waterfall)
+    const connectors = g.selectAll(".connector").data(computed.slice(1), d => d.label);
+    connectors.exit().remove();
+    const ce = connectors.enter().append("line").attr("class","connector")
+      .attr("x1", (d,i) => x(computed[i].label) + x.bandwidth())
+      .attr("x2", (d,i) => x(d.label))
+      .attr("y1", (d,i) => y(computed[i].end))
+      .attr("y2", (d,i) => y(d.start))
+      .attr("stroke","#666")
+      .attr("stroke-dasharray","3 2");
 
-    // update positions
-    g.selectAll(".legend rect").attr("fill", d => color(d.country));
-    g.selectAll(".legend text").text(d => d.country);
-  }
+    connectors.merge(ce)
+      .transition().duration(600)
+      .attr("x1", (d,i) => x(computed[i].label) + x.bandwidth())
+      .attr("x2", (d,i) => x(d.label))
+      .attr("y1", (d,i) => y(computed[i].end))
+      .attr("y2", (d,i) => y(d.start));
 
-  // selection change handler
-  function readSelectionAndUpdate() {
-    const selected = Array.from(select.node().selectedOptions, opt => opt.value).slice(0,6); // limit to 6
-    if (selected.length === 0) {
-      // if none selected, pick first
-      update([countries[0]]);
-    } else {
-      update(selected);
-    }
+    // title / subtitle update
+    svg.selectAll(".chart-title").remove();
+    svg.append("text").attr("class","chart-title")
+      .attr("x", margin.left).attr("y", 18)
+      .attr("font-size","14px").attr("font-weight","700")
+      .text(`${country} — GDP Waterfall (${computed[0].label} … ${computed[computed.length-1].label})`);
+
+    // legend
+    legendG.selectAll("*").remove();
+    const legendData = [
+      {label: "Startwert", color: colorBase},
+      {label: "Zunahme (Δ > 0)", color: colorUp},
+      {label: "Abnahme (Δ < 0)", color: colorDown}
+    ];
+    const lg = legendG.selectAll(".lg").data(legendData).enter().append("g").attr("class","lg")
+      .attr("transform", (d,i) => `translate(0,${i*24})`);
+    lg.append("rect").attr("width",14).attr("height",14).attr("fill", d => d.color).attr("stroke","#333");
+    lg.append("text").attr("x",20).attr("y",11).text(d => d.label).attr("font-size","12px");
   }
 
   // initial draw
-  readSelectionAndUpdate();
+  draw(select.property("value"));
 
-  // events
+  // selection handler
   select.on("change", () => {
-    readSelectionAndUpdate();
-    // Reset x domain to full extent when changing countries
-    x.domain(d3.extent(allYears));
-    d3.select("#resetZoom").property("disabled", false);
+    const c = select.node().value;
+    draw(c);
   });
 
-  // Brush (x-range brush) — small horizontal brush bar below chart
-  const brushHeight = 40;
-  const brushSvg = brushG.append("g");
-  const brushX = d3.scaleLinear().domain(x.domain()).range([0, width]);
-
-  // empty axis under brush for years
-  const brushAxis = brushG.append("g").attr("transform", `translate(0,${brushHeight - 18})`)
-    .call(d3.axisBottom(brushX).tickFormat(d3.format("d")));
-
-  // brush rect area
-  const brushBehavior = d3.brushX()
-    .extent([[0,0],[width,brushHeight]])
-    .on("end", ({selection}) => {
-      if (!selection) return;
-      const [x0, x1] = selection;
-      const year0 = Math.round(brushX.invert(x0));
-      const year1 = Math.round(brushX.invert(x1));
-      // clamp
-      x.domain([Math.max(d3.min(allYears), year0), Math.min(d3.max(allYears), year1)]);
-      // update main chart
-      readSelectionAndUpdate();
-      d3.select("#resetZoom").attr("disabled", null);
-    });
-
-  brushG.append("rect").attr("width", width).attr("height", brushHeight).attr("fill","transparent");
-  brushG.append("g").attr("class","brush").call(brushBehavior);
-
-  // Reset zoom
-  d3.select("#resetZoom").on("click", () => {
-    x.domain(d3.extent(allYears));
-    // clear brush selection visually
-    brushG.select(".brush").call(brushBehavior.move, null);
-    readSelectionAndUpdate();
-    d3.select("#resetZoom").attr("disabled", true);
-  }).attr("disabled", true);
-
-  // Hover behavior: show nearest point for all lines at mouse x
-  svg.on("mousemove", function(event) {
-    const [mx] = d3.pointer(event, g);
-    const yearAtMouse = Math.round(x.invert(mx - 0)); // approximate year
-    // find points at that year for visible series
-    const selected = Array.from(select.node().selectedOptions, opt => opt.value).slice(0,6);
-    if (selected.length === 0) return;
-    const visibleSeries = series.filter(s => selected.includes(s.country));
-    // show tooltip summary at cursor
-    const nearestPoints = visibleSeries.map(s => {
-      const v = s.values.find(d => d.year === yearAtMouse);
-      return v ? {country: s.country, v} : null;
-    }).filter(Boolean);
-    if (nearestPoints.length === 0) {
-      tooltip.style("display","none");
-      return;
-    }
-    const html = nearestPoints.map(p => `<strong>${p.country}</strong>: ${isNaN(p.v.GDP) ? "n/a" : d3.format(",.0f")(p.v.GDP)}`).join("<br/>");
-    tooltip.style("display","block").html(`<div>Year: ${yearAtMouse}</div><div style="margin-top:6px">${html}</div>`);
-    const [px, py] = d3.pointer(event);
-    tooltip.style("left", (px + 18) + "px").style("top", (py - 18) + "px");
-  }).on("mouseleave", ()=>tooltip.style("display","none"));
-
-  // window resize handler to keep brush domain in sync
-  window.addEventListener("resize", () => {
-    brushX.domain(x.domain());
-    brushAxis.call(d3.axisBottom(brushX).tickFormat(d3.format("d")));
+  // reset (no zoom implemented currently; placeholder)
+  d3.select("#resetView").on("click", () => {
+    draw(select.node().value);
   });
 
 }).catch(err => {
-  console.error("Failed to load or parse data/gdp.csv:", err);
-  alert("Could not load data/gdp.csv. Make sure the file exists and is semicolon-delimited.");
+  console.error("Fehler beim Laden/Parsen der CSV:", err);
+  alert("Konnte merged(2).csv nicht laden. Prüfe Dateiname und Format (semikolon).");
 });
